@@ -114,12 +114,34 @@ if "messages" not in st.session_state:
 
 
 def get_schema_description(db_path, table_name):
+    """Return a text description of columns, types, AND sample real values,
+    so the model doesn't have to guess how text values are actually formatted."""
     conn = sqlite3.connect(db_path)
+
     cursor = conn.execute(f"PRAGMA table_info({table_name})")
     cols = cursor.fetchall()
+
+    lines = [f"Table `{table_name}` has columns:"]
+    for col in cols:
+        col_name, col_type = col[1], col[2]
+        line = f"- {col_name} ({col_type})"
+
+        if col_type.upper() in ("TEXT", "VARCHAR", ""):
+            try:
+                sample_cursor = conn.execute(
+                    f'SELECT DISTINCT "{col_name}" FROM {table_name} '
+                    f'WHERE "{col_name}" IS NOT NULL LIMIT 8'
+                )
+                samples = [str(row[0]) for row in sample_cursor.fetchall()]
+                if samples:
+                    line += f"  -- example values: {samples}"
+            except Exception:
+                pass
+
+        lines.append(line)
+
     conn.close()
-    lines = [f"- {col[1]} ({col[2]})" for col in cols]
-    return f"Table `{table_name}` has columns:\n" + "\n".join(lines)
+    return "\n".join(lines)
 
 
 def get_text(content):
@@ -148,12 +170,14 @@ def extract_sql(text):
 def answer_question(question, db_path, table_name, schema):
     llm = ChatGoogleGenerativeAI(model="gemini-flash-latest", temperature=0)
 
-    sql_prompt = f"""You are a SQLite expert. Given this table schema:
+    sql_prompt = f"""You are a SQLite expert. Given this table schema and example values:
 
 {schema}
 
 Write a single valid SQLite query that answers this question:
 "{question}"
+
+Important: text values must match the real formatting shown in the example values above (e.g. use LIKE with wildcards if the exact wording is uncertain, rather than assuming a clean exact match).
 
 Only output the SQL query itself, wrapped in a ```sql code block. No explanation."""
 
